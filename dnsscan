@@ -1,0 +1,180 @@
+#!/usr/bin/php
+<?php 
+if(isset($argv[1]))
+	
+{
+	$name = $argv[1];
+	$option = isset($argv[2])?$argv[2]:'-f';
+	$authEmail = "dasdasdae@e2123ds.com";//"dsadas@fasrae.com";
+	$authKey = "50fb5b628a143da7bb7a43a346aef5624b0f3";//"42e057a4962f54d0ae413c9f8d63108b29f91";
+	$accountId = "5fafc30bcbabeccb01756326d3bcf3cc";//"92c8d77fc32cbf44138890fb9de86d88";
+	$headers = array("X-Auth-Email: $authEmail",
+					"X-Auth-Key: $authKey",
+					"Content-Type: application/json");
+	getDNS();
+}
+
+else
+
+{
+	print "Use $argv[0] <url> \n";
+	print "Example: $argv[0] xsolution.vn \n";
+}
+
+
+function getDNS()
+{
+	global $name,$accountId,$headers,$option;
+
+	$url = "https://api.cloudflare.com/client/v4/zones";
+	$zoneArr = getZone($name,$accountId,$headers,$option);
+	$status = $zoneArr['status'];
+	$zoneId = $status==='add'||$status==='edit'?$zoneArr['zoneid']:'';
+	$url.="/".$zoneId."/dns_records";
+	$params = '';
+	if($status==='add')
+	{
+		sleep(30);
+	}
+	if($status==='add'||$status==='edit')
+	{
+		$data = json_decode(getData($url,$params,$headers));
+		$result = $data->result;
+	}
+	else
+	{
+		$data = json_decode(getHost($name,$headers));
+		$result = $data->result;
+	}
+	
+	
+	if(count($result)>0)
+	{
+		for($i=0;$i<count($result);$i++)
+		{
+			if($status==='add'||$status==='edit')
+			{
+				$dns[$i]['type'] = $result[$i]->type;
+				$dns[$i]['name'] = $result[$i]->name;
+				$dns[$i]['value'] = $result[$i]->content;
+			}
+			else
+			{
+				$dns[$i]['type'] = 'A';
+				$dns[$i]['name'] = $result[$i][0][0];
+				$dns[$i]['value'] = $result[$i][0][1];
+			}
+		}
+		header('Content-Type: application/json; charset=utf-8');
+		$dns = json_encode($dns, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+
+		saveFile($name,$dns);
+
+		echo $dns."\n";
+		echo "Got ".count($result)." records on domain ".$name."\n";
+	}
+	else
+	{
+		echo "Domain $name does not have any records. \n";
+	}
+}
+
+
+function getZone($name,$accountId,$headers,$option)
+{
+	$url = "https://api.cloudflare.com/client/v4/zones";
+	$params = array("name" => $name,
+					"account" => array(
+						"id" => $accountId,
+						"name" => "GET DNS"
+						),
+					"jump_start" => true
+				);
+	$params = json_encode($params);
+	$data = json_decode(getData($url,$params,$headers,'POST'));
+	$success = $data->success;
+	if($success)
+	{
+		$result = $data->result;
+		return array("status"=>"add","zoneid"=>$result->id);
+	}
+	else
+	{
+		$errors = $data->errors[0];
+		if($errors->code === 1061 && $option==='-f')
+		{
+			$params = array("name"=>$name);
+			$params = http_build_query($params);
+			$url.='?'.$params;
+			$data = json_decode(getData($url,$params,$headers));
+			$result = $data->result[0];
+			//return $result->id;
+			return array("status"=>"edit","zoneid"=>$result->id);
+		}
+		elseif($errors->code === 1105 || $option==='-a')
+		{
+			return array("status"=>"failed");
+
+		}
+		elseif($errors->code === 1097 || $option==='-a')
+		{
+			return array("status"=>"failed");
+		}
+		elseif($errors->code === 1116)
+		{
+			echo "Domain $name la mot subdomain,vui long nhap domain chinh \n";die;
+		}
+		elseif($errors->code === 1099)
+		{
+			echo "Domain $name chua duoc dang ky \n";die;
+		}
+	}
+}
+
+function getHost($name,$headers)
+{
+	$url = "https://api.hackertarget.com/hostsearch/?q=$name";
+	$params = '';
+	$data = getData($url,$params,$headers);
+	$dataArr = preg_split('/[\s]+/', $data);
+	$record['result'] = array();
+	for ($i=0; $i < count($dataArr) ; $i++) { 
+		$record['result'][$i][] = explode(',', $dataArr[$i],2);
+	}
+	$data = json_encode($record);
+	return $data;
+}
+
+function getData($url,$params,$headers = array(),$method = 'GET')
+{
+	$post = $method==='POST'?true:false;
+	$curl = curl_init();
+	$timeout = 50;
+	curl_setopt($curl,CURLOPT_URL,$url);
+	curl_setopt($curl, CURLOPT_POST, $post);
+	if($post)
+	{
+		curl_setopt($curl, CURLOPT_POSTFIELDS, $params);
+	}
+	curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
+	curl_setopt($curl,CURLOPT_RETURNTRANSFER,1);
+	curl_setopt($curl,CURLOPT_CONNECTTIMEOUT,$timeout);
+	$data = curl_exec($curl);
+	curl_close($curl);
+	return $data;
+}
+
+function saveFile($name,$content)
+{
+	$currentDir = getcwd();
+	$saveFolder = $currentDir."/dnsoutput/".$name;
+	$fileName = date("YmdHis").'_'.$name.".json";
+	if(!is_dir($saveFolder))
+	{
+		mkdir($saveFolder,0711,true);
+	}
+	$file = fopen($saveFolder.'/'.$fileName, "w");
+	fwrite($file, $content);
+	fclose($file);
+	chmod($saveFolder.'/'.$fileName,0644);
+}
